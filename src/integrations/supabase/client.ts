@@ -15,3 +15,13 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
     autoRefreshToken: true,
   }
 });
+
+// Expose URL and key for direct fetch calls when needed
+export const supabaseConfig = {
+  supabaseUrl: SUPABASE_URL,
+  supabaseKey: SUPABASE_PUBLISHABLE_KEY
+};
+
+// Add to supabase object for convenience
+(supabase as any).supabaseUrl = SUPABASE_URL;
+(supabase as any).supabaseKey = SUPABASE_PUBLISHABLE_KEY;

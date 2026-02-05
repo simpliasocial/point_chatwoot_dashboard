@@ -110,7 +110,21 @@ async function obtenerConversacionesPorEtiqueta(
         continue
       }
 
-      const data: ChatwootResponse = await response.json()
+      let data: ChatwootResponse
+      try {
+        const rawData = await response.json()
+        console.log(`📦 Respuesta raw de Chatwoot para ${label} página ${currentPage}:`, JSON.stringify(rawData).substring(0, 200))
+        data = rawData as ChatwootResponse
+      } catch (parseError) {
+        console.error(`❌ Error parseando JSON para ${label} página ${currentPage}:`, parseError)
+        currentPage++
+        consecutiveEmptyPages++
+        if (consecutiveEmptyPages >= maxConsecutiveEmptyPages) {
+          hasMorePages = false
+        }
+        continue
+      }
+
       const conversations = data.data?.payload || []
       const meta = data.data?.meta || { mine_count: 0, assigned_count: 0, unassigned_count: 0, all_count: 0 }
 
@@ -261,11 +275,15 @@ async function procesarMetricasPorEtiqueta(
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders })
-  }
-
   try {
+    // Handle CORS preflight
+    if (req.method === 'OPTIONS') {
+      return new Response(null, {
+        status: 200,
+        headers: corsHeaders
+      })
+    }
+
     const { type, date, dateFrom, dateTo } = await req.json()
 
     console.log('Parámetros de solicitud:', { type, date, dateFrom, dateTo })
@@ -274,7 +292,25 @@ serve(async (req) => {
     const CHATWOOT_ACCOUNT_ID = Deno.env.get('CHATWOOT_ACCOUNT_ID')
 
     if (!CHATWOOT_BASE_URL || !CHATWOOT_API_TOKEN || !CHATWOOT_ACCOUNT_ID) {
-      throw new Error('Configuración de Chatwoot faltante')
+      console.error('❌ Variables de entorno faltantes:', {
+        hasBaseUrl: !!CHATWOOT_BASE_URL,
+        hasToken: !!CHATWOOT_API_TOKEN,
+        hasAccountId: !!CHATWOOT_ACCOUNT_ID
+      })
+      return new Response(
+        JSON.stringify({
+          error: 'Configuración de Chatwoot faltante. Por favor configura las variables de entorno en Supabase.',
+          details: {
+            CHATWOOT_BASE_URL: !!CHATWOOT_BASE_URL,
+            CHATWOOT_API_TOKEN: !!CHATWOOT_API_TOKEN,
+            CHATWOOT_ACCOUNT_ID: !!CHATWOOT_ACCOUNT_ID
+          }
+        }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
     }
 
     console.log('Configuración Chatwoot:', {
@@ -320,8 +356,16 @@ serve(async (req) => {
       fechaInicio = dateFrom
       fechaFin = dateTo
     } else {
-      throw new Error('Parámetros de fecha inválidos')
-    } console.log(`🚀 Procesando métricas del ${fechaInicio} al ${fechaFin}`)
+      return new Response(
+        JSON.stringify({ error: 'Parámetros de fecha inválidos' }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        }
+      )
+    }
+
+    console.log(`🚀 Procesando métricas del ${fechaInicio} al ${fechaFin}`)
 
     // Procesar cada etiqueta
     for (const label of labels) {
@@ -387,10 +431,17 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
   } catch (error) {
-    console.error('Error en función edge:', error)
+    // Este catch captura CUALQUIER error, incluyendo errores de parsing JSON
+    console.error('❌ Error crítico en función edge:', error)
     const errorMessage = error instanceof Error ? error.message : 'Error desconocido'
+    const errorStack = error instanceof Error ? error.stack : ''
+
     return new Response(
-      JSON.stringify({ error: errorMessage }),
+      JSON.stringify({
+        error: errorMessage,
+        stack: errorStack,
+        message: 'Error al procesar la solicitud. Verifica los logs de Supabase para más detalles.'
+      }),
       {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }

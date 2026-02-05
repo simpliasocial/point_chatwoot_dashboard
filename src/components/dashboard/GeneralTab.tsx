@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { supabase, supabaseConfig } from "@/integrations/supabase/client";
 import MetricCard from "./MetricCard";
 import {
   FileText,
@@ -29,44 +29,99 @@ import LoadingState from "@/components/ui/loading-state";
 import { MessageSquare } from "lucide-react";
 
 const GeneralTab = () => {
-  const [dateFrom, setDateFrom] = useState<Date | undefined>(new Date(2025, 8, 1)); // September 1, 2025
-  const [dateTo, setDateTo] = useState<Date | undefined>(new Date());
+  // No date filters needed for chatwoot-labels-current
 
-  // Fetch Chatwoot metrics via edge function
-  const { data: chatwootMetrics, isLoading: loadingChatwoot, error } = useQuery({
-    queryKey: ["chatwoot-general", dateFrom?.toISOString(), dateTo?.toISOString()],
+  // Fetch Chatwoot labels (current totals, no date filter)
+  const { data: chatwootData, isLoading: loadingChatwoot, error } = useQuery({
+    queryKey: ["chatwoot-labels-current"],
     queryFn: async () => {
-      if (!dateFrom || !dateTo) {
-        throw new Error("Fechas requeridas");
-      }
+      console.log("🚀 Iniciando carga de etiquetas actuales de Chatwoot (sin filtro de fecha)");
 
-      const fechaInicio = format(dateFrom, "yyyy-MM-dd");
-      const fechaFin = format(dateTo, "yyyy-MM-dd");
+      // URL de la nueva Edge Function
+      const functionUrl = `${supabaseConfig.supabaseUrl}/functions/v1/chatwoot-labels-current`;
 
-      console.log("Obteniendo métricas de Chatwoot para:", {
-        fechaInicio,
-        fechaFin,
-        tipo: "range"
-      });
+      // Inicializar variables de paginación
+      let pageFrom = 1;
+      let pageTo = 10;
+      let isDone = false;
+      const accumulatedCounts: Record<string, number> = {};
+      let totalPagesProcessed = 0;
+      let totalConversations = 0;
+      let allCount = 0;
 
-      const { data, error } = await supabase.functions.invoke("chatwoot-metrics", {
-        body: {
-          type: "range",
-          dateFrom: fechaInicio,
-          dateTo: fechaFin
+      // Loop de paginación hasta que done === true
+      while (!isDone) {
+        totalPagesProcessed++;
+
+        console.log(`📄 Solicitando páginas ${pageFrom} a ${pageTo}...`);
+
+        const response = await fetch(functionUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${supabaseConfig.supabaseKey}`,
+          },
+          body: JSON.stringify({
+            status: "all",
+            perPage: 25,
+            pageFrom,
+            pageTo,
+            maxPagesPerCall: 10
+          })
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error("❌ Error HTTP:", response.status, errorText);
+          throw new Error(`Error HTTP ${response.status}: ${errorText}`);
         }
-      });
 
-      if (error) {
-        console.error("Error obteniendo métricas de Chatwoot:", error);
-        throw new Error(`Error de API: ${error.message}`);
+        const data = await response.json();
+
+        console.log(`✅ Chunk ${totalPagesProcessed} recibido:`, {
+          pages: `${pageFrom}-${pageTo}`,
+          conversaciones: data.total_conversaciones_leidas_en_este_chunk,
+          done: data.done,
+          next: data.next_page_from ? `${data.next_page_from}-${data.next_page_to}` : 'N/A'
+        });
+
+        // Guardar all_count del primer chunk
+        if (totalPagesProcessed === 1 && data.meta_all_count) {
+          allCount = data.meta_all_count;
+          console.log(`📊 Total de conversaciones (all_count): ${allCount}`);
+        }
+
+        // Acumular conteos de etiquetas
+        if (data.counts_by_label_name) {
+          for (const [label, count] of Object.entries(data.counts_by_label_name)) {
+            accumulatedCounts[label] = (accumulatedCounts[label] || 0) + (count as number);
+          }
+        }
+
+        totalConversations += data.total_conversaciones_leidas_en_este_chunk || 0;
+
+        // Verificar si está completo
+        if (data.done === true) {
+          isDone = true;
+          console.log(`🎯 Carga completa! Total de chunks procesados: ${totalPagesProcessed}`);
+          console.log(`📊 Total de conversaciones procesadas: ${totalConversations}`);
+        } else if (data.next_page_from !== null && data.next_page_from !== undefined) {
+          pageFrom = data.next_page_from;
+          pageTo = data.next_page_to;
+        } else {
+          // Fallback: si no hay done ni next_page_from, terminar
+          isDone = true;
+          console.log(`⚠️ Terminando: no hay done=true ni next_page_from`);
+        }
       }
 
-      console.log("Métricas recibidas:", data);
-      return data;
+      console.log("✅ Etiquetas finales acumuladas:", accumulatedCounts);
+      return {
+        labels: accumulatedCounts,
+        totalConversations: allCount || totalConversations
+      };
     },
     retry: 2,
-    enabled: !!dateFrom && !!dateTo,
     refetchOnWindowFocus: false,
     staleTime: 5 * 60 * 1000, // 5 minutos
   });
@@ -74,8 +129,8 @@ const GeneralTab = () => {
   if (loadingChatwoot) {
     return (
       <LoadingState
-        title="Cargando datos de Chatwoot..."
-        message="Obteniendo todas las conversaciones, aplicando paginación completa y filtros de fecha. Esto puede tomar unos momentos."
+        title="Cargando métricas de Chatwoot..."
+        message="Procesando conversaciones por bloques. Esto puede tardar varios segundos dependiendo del rango de fechas seleccionado. Por favor espere..."
         skeletonCount={9}
       />
     );
@@ -102,224 +157,175 @@ const GeneralTab = () => {
     <div>
       <h2 className="text-2xl font-bold mb-2">Métricas Generales</h2>
       <p className="text-muted-foreground mb-4">
-        Vista general de campañas y conversaciones desde Chatwoot
-        <br />
-        <span className="text-xs text-muted-foreground">
-          {dateFrom && dateTo && (
-            `Período: ${format(dateFrom, "dd/MM/yyyy")} - ${format(dateTo, "dd/MM/yyyy")} (Zona horaria: Ecuador UTC-5)`
-          )}
-        </span>
+        Vista general de etiquetas actuales en Chatwoot (sin filtro de fecha)
       </p>
-
-      <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-muted-foreground">Fecha Inicio</label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="justify-start text-left font-normal min-w-[200px]">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {dateFrom ? format(dateFrom, "PPP") : "Seleccionar fecha"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="single"
-                selected={dateFrom}
-                onSelect={setDateFrom}
-                initialFocus
-                className={cn("p-3 pointer-events-auto")}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-
-        <div className="flex flex-col gap-2">
-          <label className="text-sm font-medium text-muted-foreground">Fecha Fin</label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="justify-start text-left font-normal min-w-[200px]">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {dateTo ? format(dateTo, "PPP") : "Seleccionar fecha"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar
-                mode="single"
-                selected={dateTo}
-                onSelect={setDateTo}
-                initialFocus
-                className={cn("p-3 pointer-events-auto")}
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-      </div>
-    </div>        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+    </div>
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
       <MetricCard
         title="TOTAL CONVERSACIONES"
-        value={loadingChatwoot ? "..." : (chatwootMetrics?.total_conversations?.toString() || "0")}
+        value={loadingChatwoot ? "..." : (chatwootData?.totalConversations?.toString() || "0")}
         icon={MessageSquare}
-        description="Total histórico de conversaciones en Chatwoot"
+        description="Total de conversaciones en Chatwoot"
         variant="default"
         className="bg-primary/10 border-primary/20"
       />
       <MetricCard
         title="Comprobantes Enviados"
-        value={chatwootMetrics?.comprobante_enviado?.toString() || "0"}
+        value={chatwootData?.labels?.comprobante_enviado?.toString() || "0"}
         icon={FileText}
         description="Cliente mandó el comprobante de pago"
         variant="primary"
       />
       <MetricCard
         title="Facturas Enviadas"
-        value={chatwootMetrics?.factura_enviada?.toString() || "0"}
+        value={chatwootData?.labels?.factura_enviada?.toString() || "0"}
         icon={FileText}
         description="Cliente indicó que ya pagó y mandó factura de pago"
         variant="primary"
       />
       <MetricCard
         title="Consultas Saldo"
-        value={chatwootMetrics?.consulto_saldo?.toString() || "0"}
+        value={chatwootData?.labels?.consulto_saldo?.toString() || "0"}
         icon={Search}
         description="Cliente realizó consulta de sus créditos para saber qué valores tiene pendientes"
         variant="primary"
       />
       <MetricCard
         title="Pagado"
-        value={chatwootMetrics?.pagado?.toString() || "0"}
+        value={chatwootData?.labels?.pagado?.toString() || "0"}
         icon={CreditCard}
         description="Se da a conocer que cliente ya había pagado y no tiene nada pendiente por pagar"
         variant="success"
       />
       <MetricCard
         title="Soporte"
-        value={chatwootMetrics?.soporte?.toString() || "0"}
+        value={chatwootData?.labels?.soporte?.toString() || "0"}
         icon={Headphones}
         description="Usuario pidió contacto humano directo - que quiere hablar con alguien explícitamente"
         variant="warning"
       />
       <MetricCard
         title="Cobrador"
-        value={chatwootMetrics?.cobrador?.toString() || "0"}
+        value={chatwootData?.labels?.cobrador?.toString() || "0"}
         icon={UserCheck}
         description="Cliente solicita que se le envíe un cobrador"
         variant="warning"
       />
       <MetricCard
         title="Devolución Producto"
-        value={chatwootMetrics?.devolucion_producto?.toString() || "0"}
+        value={chatwootData?.labels?.devolucion_producto?.toString() || "0"}
         icon={PackageX}
         description="Cliente solicita devolver el producto adquirido"
         variant="destructive"
       />
       <MetricCard
         title="Servicio Técnico"
-        value={chatwootMetrics?.servicio_tecnico?.toString() || "0"}
+        value={chatwootData?.labels?.servicio_tecnico?.toString() || "0"}
         icon={Wrench}
         description="Cliente desea hablar con soporte técnico"
         variant="warning"
       />
       <MetricCard
         title="Consulta Datos Transferencia"
-        value={chatwootMetrics?.consulto_datos_transferencia?.toString() || "0"}
+        value={chatwootData?.labels?.consulto_datos_transferencia?.toString() || "0"}
         icon={Banknote}
         description="Cliente solicita datos de cuentas bancarias"
         variant="primary"
       />
       <MetricCard
         title="No Registrado"
-        value={chatwootMetrics?.no_registrado?.toString() || "0"}
+        value={chatwootData?.labels?.no_registrado?.toString() || "0"}
         icon={UserX}
         description="Cliente no encontrado en base de datos de POINT"
         variant="destructive"
       />
       <MetricCard
         title="Casos Resueltos"
-        value={chatwootMetrics?.resuelto?.toString() || "0"}
+        value={chatwootData?.labels?.resuelto?.toString() || "0"}
         icon={CheckCircle}
         description="Casos resueltos de soporte, servicio técnico, devolución producto y cobrador"
         variant="success"
       />
       <MetricCard
         title="Número Equivocado"
-        value={chatwootMetrics?.numero_equivocado?.toString() || "0"}
+        value={chatwootData?.labels?.numero_equivocado?.toString() || "0"}
         icon={PhoneOff}
         description="Cliente indicó que fue contactado por error"
         variant="destructive"
       />
       <MetricCard
         title="Compromiso Pago"
-        value={chatwootMetrics?.compromiso_pago?.toString() || "0"}
+        value={chatwootData?.labels?.compromiso_pago?.toString() || "0"}
         icon={Handshake}
         description="Cliente se ha comprometido a realizar el pago"
         variant="success"
       />
       <MetricCard
         title="Documento Enviado"
-        value={chatwootMetrics?.documento_enviado?.toString() || "0"}
+        value={chatwootData?.labels?.documento_enviado?.toString() || "0"}
         icon={FileText}
         description="Cliente envió un documento (no necesariamente comprobante)"
         variant="primary"
       />
       <MetricCard
         title="Faltan Datos"
-        value={chatwootMetrics?.faltan_datos?.toString() || "0"}
+        value={chatwootData?.labels?.faltan_datos?.toString() || "0"}
         icon={AlertCircle}
         description="No se reconocen bien los datos del comprobante enviado"
         variant="warning"
       />
       <MetricCard
         title="Imagen Enviada"
-        value={chatwootMetrics?.imagen_enviada?.toString() || "0"}
+        value={chatwootData?.labels?.imagen_enviada?.toString() || "0"}
         icon={FileText}
         description="Cliente envió una imagen"
         variant="primary"
       />
       <MetricCard
         title="Pago Parcial"
-        value={chatwootMetrics?.pago_parcial?.toString() || "0"}
+        value={chatwootData?.labels?.pago_parcial?.toString() || "0"}
         icon={Banknote}
         description="Todavía tiene monto pendiente por pagar"
         variant="warning"
       />
       <MetricCard
         title="Quiero Pagar"
-        value={chatwootMetrics?.quiero_pagar?.toString() || "0"}
+        value={chatwootData?.labels?.quiero_pagar?.toString() || "0"}
         icon={Handshake}
         description="Cliente quiere hacer gestión de pago"
         variant="success"
       />
       <MetricCard
         title="Reactivación Cobro"
-        value={chatwootMetrics?.reactivacion_cobro?.toString() || "0"}
+        value={chatwootData?.labels?.reactivacion_cobro?.toString() || "0"}
         icon={UserCheck}
         description="Gestión de reactivación de cobro"
         variant="default"
       />
       <MetricCard
         title="Recordatorio"
-        value={chatwootMetrics?.recordatorio?.toString() || "0"}
+        value={chatwootData?.labels?.recordatorio?.toString() || "0"}
         icon={CalendarIcon}
         description="Recordatorio general"
         variant="default"
       />
       <MetricCard
         title="Recordatorio Compromiso"
-        value={chatwootMetrics?.recordatorio_compromiso_pago?.toString() || "0"}
+        value={chatwootData?.labels?.recordatorio_compromiso_pago?.toString() || "0"}
         icon={CalendarIcon}
         description="Recordatorio de compromiso de pago"
         variant="warning"
       />
       <MetricCard
         title="Mora 1 Día"
-        value={chatwootMetrics?.recordatorio_diasmora_1?.toString() || "0"}
+        value={chatwootData?.labels?.recordatorio_diasmora_1?.toString() || "0"}
         icon={AlertCircle}
         description="Recordatorio de 1 día de mora"
         variant="destructive"
       />
       <MetricCard
         title="Mora < 3 Días"
-        value={chatwootMetrics?.recordatorio_diasmora_menos_3?.toString() || "0"}
+        value={chatwootData?.labels?.recordatorio_diasmora_menos_3?.toString() || "0"}
         icon={AlertCircle}
         description="Recordatorio de menos de 3 días de mora"
         variant="destructive"

@@ -213,7 +213,7 @@ const ConversationHistoryTab = () => {
 
       while (hasMoreData) {
         console.log(`📖 Obteniendo página ${page + 1}...`);
-        const { data, error } = await supabase
+        const { data, error, count } = await supabase
           .from("POINT_Competencia")
           .select(`
             idCompra,
@@ -232,7 +232,7 @@ const ConversationHistoryTab = () => {
             TipoDePago,
             RestanteSaldoVencido,
             EstadoEtiqueta
-          `)
+          `, { count: 'exact' })
           .not("conversation_id", "is", null)
           .neq("conversation_id", 0)
           .range(page * pageSize, (page + 1) * pageSize - 1)
@@ -248,17 +248,24 @@ const ConversationHistoryTab = () => {
           console.log(`✅ Página ${page + 1}: ${data.length} registros obtenidos`);
           console.log(`📈 Total acumulado: ${allData.length} registros`);
 
-          // Si obtuvimos menos registros que el pageSize, es la última página
-          if (data.length < pageSize) {
-            hasMoreData = false;
-          } else {
+          // Log del total esperado en la primera página
+          if (page === 0 && count) {
+            console.log(`🎯 Total esperado en la base de datos: ${count} registros`);
+          }
+
+          // Continuar si hemos obtenido exactamente pageSize registros
+          // Solo parar cuando obtengamos menos registros o cuando alcancemos el total
+          if (data.length === pageSize && (!count || allData.length < count)) {
             page++;
+          } else {
+            hasMoreData = false;
           }
         } else {
           hasMoreData = false;
         }
-      } console.log(`🎯 TOTAL FINAL obtenido: ${allData.length} registros`);
-      console.log(`✅ Esperados: 1,681 registros con conversation_id válido`);
+      }
+
+      console.log(`🎯 TOTAL FINAL obtenido: ${allData.length} registros`);
       console.log(`📊 Cada registro = 1 conversación individual (puede haber múltiples conversaciones por persona)`);
 
       return allData as ConversationRecord[];
