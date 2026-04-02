@@ -17,7 +17,7 @@ const Dashboard = () => {
   };
 
   const handleGoHome = () => {
-    window.location.href = "https://id-preview--d33e7a35-34ae-4569-9721-254e26aa777d.lovable.app/simpliacollect";
+    window.location.href = "https://cobranza-ec.lovable.app";
   };
 
   return (

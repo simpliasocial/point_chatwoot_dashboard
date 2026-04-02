@@ -199,8 +199,24 @@ const ConversationHistoryTab = () => {
   const [priorityFilter, setPriorityFilter] = useState<"todos" | "5" | "4" | "3" | "2" | "1">("todos");
   const [selectedRecord, setSelectedRecord] = useState<ConversationRecord | null>(null);
 
+  // Query global cache (very fast)
+  const { data: globalCache } = useQuery({
+    queryKey: ["dashboard-cache", "conversation-records-v3"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("dashboard_cache" as any)
+        .select("data")
+        .eq("key", "conversation-records-v3")
+        .maybeSingle();
+
+      if (error) return null;
+      return (data as any)?.data || null;
+    },
+    staleTime: Infinity,
+  });
+
   // Consulta para obtener todos los registros con conversation_id válido
-  const { data: allRecords, isLoading: isLoadingAll } = useQuery({
+  const { data: allRecordsData, isLoading: isLoadingAll, isFetching: isFetchingAllRecords } = useQuery({
     queryKey: ["conversation-records-v3"], // Cambiar key para forzar refetch
     queryFn: async () => {
       console.log("🔍 Obteniendo TODOS los registros con conversaciones...");
@@ -268,11 +284,25 @@ const ConversationHistoryTab = () => {
       console.log(`🎯 TOTAL FINAL obtenido: ${allData.length} registros`);
       console.log(`📊 Cada registro = 1 conversación individual (puede haber múltiples conversaciones por persona)`);
 
+      try {
+        await supabase.from("dashboard_cache" as any).upsert({
+          key: "conversation-records-v3",
+          data: allData,
+          updated_at: new Date().toISOString()
+        });
+      } catch (e) {
+        console.error("No se pudo guardar en caché global", e);
+      }
+
       return allData as ConversationRecord[];
     },
     retry: 2,
     staleTime: 5 * 60 * 1000, // 5 minutos
   });
+
+  const allRecords = allRecordsData || globalCache;
+  const isInitialLoadingList = isLoadingAll && !allRecords;
+  const isBackgroundUpdatingList = isFetchingAllRecords && !!allRecords;
 
   // Query para obtener el detalle del cliente seleccionado y su conversación
   const { data: customerData, isLoading: isLoadingDetail } = useQuery({
@@ -509,7 +539,22 @@ const ConversationHistoryTab = () => {
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-bold mb-2">Conversaciones de WhatsApp</h2>
-        <p className="text-muted-foreground">Busca por cédula, celular, nombre o ID de compra para ver el historial de conversaciones del cliente</p>
+        <div className="flex justify-between items-start flex-wrap gap-4">
+          <p className="text-muted-foreground">Busca por cédula, celular, nombre o ID de compra para ver el historial de conversaciones del cliente</p>
+          {isBackgroundUpdatingList && (
+            <Alert className="w-auto bg-blue-50 text-blue-800 border-blue-200 py-2">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-3 w-3">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500"></span>
+                </span>
+                <AlertDescription className="font-medium text-sm">
+                  Se están actualizando los datos...
+                </AlertDescription>
+              </div>
+            </Alert>
+          )}
+        </div>
       </div>
 
       <Card className="border-2 border-blue-200">
@@ -559,7 +604,7 @@ const ConversationHistoryTab = () => {
         </CardContent>
       </Card>
 
-      {isLoadingAll ? (
+      {isInitialLoadingList ? (
         <LoadingState
           title="Cargando clientes..."
           message="Buscando todos los clientes con conversaciones activas en el sistema."
@@ -909,10 +954,24 @@ const ConversationHistoryTab = () => {
                     {/* Conversation History Card */}
                     <Card className="border-2 border-blue-200">
                       <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                          <MessageCircle className="w-5 h-5" />
-                          Historial de Conversación
-                        </CardTitle>
+                        <div className="flex items-center justify-between flex-wrap gap-4">
+                          <CardTitle className="flex items-center gap-2">
+                            <MessageCircle className="w-5 h-5" />
+                            Historial de Conversación
+                          </CardTitle>
+                          <Button
+                            onClick={() => {
+                              const chatwootUrl = import.meta.env.VITE_CHATWOOT_API_URL || "https://chatwoot-production-85da.up.railway.app";
+                              const accountId = import.meta.env.VITE_CHATWOOT_ACCOUNT_ID || "2";
+                              const conversationUrl = `${chatwootUrl}/app/accounts/${accountId}/conversations/${customerData.customer.conversation_id}`;
+                              window.open(conversationUrl, '_blank');
+                            }}
+                            className="bg-[#1f93ff] hover:bg-[#1f93ff]/90 text-white"
+                          >
+                            <MessageCircle className="w-4 h-4 mr-2" />
+                            Abrir en Chatwoot
+                          </Button>
+                        </div>
                       </CardHeader>
                       <CardContent>
                         {!customerData.conversations || customerData.conversations.mensajes.length === 0 ? (
