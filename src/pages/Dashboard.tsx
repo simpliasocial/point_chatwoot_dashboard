@@ -10,9 +10,12 @@ import ConversationHistoryTab from "@/components/dashboard/ConversationHistoryTa
 
 const Dashboard = () => {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState("general"); const handleLogout = () => {
+  const [activeTab, setActiveTab] = useState("general");
+
+  const handleLogout = async () => {
     console.log("🚪 Cerrando sesión...");
     sessionStorage.clear();
+    await supabase.auth.signOut();
     navigate("/login", { replace: true });
   };
 

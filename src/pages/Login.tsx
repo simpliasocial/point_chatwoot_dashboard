@@ -25,47 +25,54 @@ const Login = () => {
     });
   }, [navigate]);
 
+  const ALLOWED_USERS = ["soljara", "jhoana", "alejandra", "lukas", "jose", "hernan", "justin", "paolo"];
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
 
     try {
-      // Mapeo de usuario "point" a email real para compatibilidad
-      const emailToUse = username.toLowerCase() === "point"
-        ? "point@point.com"
-        : username;
-
-      // Mapeo de contraseña "point" a "point123" para cumplir longitud mínima de Supabase (6 chars)
-      const passwordToUse = password === "point"
-        ? "point123"
-        : password;
+      const normalizedUsername = username.trim().toLowerCase();
+      // Si el username no tiene '@', le agregamos @point.com
+      const emailToUse = normalizedUsername.includes('@')
+        ? normalizedUsername
+        : `${normalizedUsername}@point.com`;
 
       console.log("🔐 === INTENTO DE INICIO DE SESIÓN ===");
       console.log("Usuario/Email:", emailToUse);
 
-      // 1. Intentar iniciar sesión con credenciales mapeadas
+      // 1. Intentar iniciar sesión
       const { data, error } = await supabase.auth.signInWithPassword({
         email: emailToUse,
-        password: passwordToUse,
+        password: password,
       });
 
       if (error) {
         console.error("❌ Error de autenticación:", error.message);
 
-        // 2. Si falla y es el usuario "point", intentar registrarlo automáticamente con la contraseña mapeada
-        if (error.message.includes("Invalid login credentials") && username.toLowerCase() === "point") {
-          console.log("⚠️ Usuario no encontrado o contraseña incorrecta. Intentando registro automático para 'point'...");
+        // 2. Si falla por credenciales inválidas y es un usuario de la lista de permitidos,
+        // intentamos registrarlo por si aún no existe en Supabase.
+        if (error.message.includes("Invalid login credentials") && ALLOWED_USERS.includes(normalizedUsername)) {
+          console.log(`⚠️ Usuario permitido '${normalizedUsername}' no encontrado o contraseña incorrecta. Intentando registro...`);
 
           const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
             email: emailToUse,
-            password: passwordToUse,
+            password: password,
           });
 
           if (signUpError) {
+            // Si el error de registro indica que ya existe, entonces realmente la contraseña era incorrecta
+            if (signUpError.message.includes("already registered") || signUpError.message.includes("already exists")) {
+              toast.error("Credenciales incorrectas.");
+              setLoading(false);
+              return;
+            }
+
             console.error("❌ Error al registrar:", signUpError.message);
-            toast.error("No se pudo iniciar sesión ni registrar", {
+            toast.error("Error de inicio de sesión", {
               description: signUpError.message
             });
+            setLoading(false);
             return;
           }
 
@@ -75,22 +82,37 @@ const Login = () => {
             navigate("/dashboard");
             return;
           } else if (signUpData.user) {
-            toast.info("Cuenta creada. Verifica tu correo.", {
-              description: "Se ha enviado un enlace de confirmación a " + emailToUse
+            // Intentar iniciar sesión de nuevo en caso de requerir confirmación o estar ya logueado
+            const { data: retryData, error: retryError } = await supabase.auth.signInWithPassword({
+              email: emailToUse,
+              password: password,
             });
-            return;
+
+            if (retryData?.session) {
+              console.log("✅ ¡SESIÓN INICIADA!");
+              toast.success("¡Bienvenido a Cobranza POINT!");
+              navigate("/dashboard");
+              return;
+            } else {
+              toast.info("Cuenta creada", {
+                description: "Contacta al administrador para que tu cuenta sea aprobada o intenta iniciar sesión nuevamente."
+              });
+              setLoading(false);
+              return;
+            }
           }
         }
 
         toast.error("Error de inicio de sesión", {
           description: error.message === "Invalid login credentials"
-            ? "Credenciales incorrectas."
+            ? "Credenciales incorrectas o usuario no autorizado."
             : error.message
         });
+        setLoading(false);
         return;
       }
 
-      if (data.session) {
+      if (data?.session) {
         console.log("✅ ¡SESIÓN INICIADA CORRECTAMENTE!");
         toast.success("¡Bienvenido a Cobranza POINT!");
         navigate("/dashboard");
