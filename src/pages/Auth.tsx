@@ -29,49 +29,34 @@ const Auth = () => {
     setLoading(true);
 
     try {
-      if (username.trim() === "point" && password === "point") {
-        // 1) Intentar iniciar sesión con Supabase
-        const { data, error } = await supabase.auth.signInWithPassword({
-          email: "point@point.com",
-          password: "point123",
-        });
+      // Permitir iniciar sesión escribiendo solo el usuario (ej: SolJara, Jhoana) o el correo completo
+      const formattedUsername = username.trim().toLowerCase();
+      const email = formattedUsername.includes("@") ? formattedUsername : `${formattedUsername}@point.com`;
 
-        // 2) Si falla, crear la cuenta automáticamente y pedir confirmar (o desactivar confirmación)
-        if (error || !data.session) {
-          const redirectUrl = `${window.location.origin}/dashboard`;
-          const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-            email: "point@point.com",
-            password: "point123",
-            options: { emailRedirectTo: redirectUrl },
-          });
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-          if (signUpError) {
-            toast({
-              variant: "destructive",
-              title: "No se pudo crear/iniciar sesión",
-              description: signUpError.message || "Revisa configuración de confirmación de correo en Supabase.",
-            });
-            return;
-          }
-
-          if (!signUpData.session) {
-            toast({
-              title: "Usuario creado",
-              description: "Confirma el correo o desactiva 'Confirm email' en Supabase para iniciar sesión al instante.",
-            });
-            return;
-          }
-        }
-
-        toast({ title: "¡Bienvenido!", description: "Inicio de sesión exitoso" });
-        navigate("/dashboard");
-      } else {
+      if (error) {
         toast({
           variant: "destructive",
           title: "Credenciales inválidas",
           description: "Usuario o contraseña incorrectos",
         });
+        return;
       }
+
+      if (data.session) {
+        toast({ title: "¡Bienvenido!", description: "Inicio de sesión exitoso" });
+        navigate("/dashboard");
+      }
+    } catch (error: any) {
+      toast({
+        variant: "destructive",
+        title: "Error al iniciar sesión",
+        description: error.message || "Ocurrió un error inesperado",
+      });
     } finally {
       setLoading(false);
     }
