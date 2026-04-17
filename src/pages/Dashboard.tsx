@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { LogOut, Home } from "lucide-react";
@@ -12,11 +13,9 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("general");
 
-  const handleLogout = async () => {
-    console.log("🚪 Cerrando sesión...");
-    sessionStorage.clear();
-    await supabase.auth.signOut();
-    navigate("/login", { replace: true });
+  const handleLogout = () => {
+    console.log("🚪 Cierre de sesión deshabilitado temporalmente.");
+    toast.info("El cierre de sesión ha sido deshabilitado.");
   };
 
   const handleGoHome = () => {
@@ -36,10 +35,6 @@ const Dashboard = () => {
           <Button variant="default" onClick={handleGoHome}>
             <Home className="w-4 h-4 mr-2" />
             Volver al Inicio
-          </Button>
-          <Button variant="outline" onClick={handleLogout} className="text-blue-600 border-blue-200 hover:bg-blue-50">
-            <LogOut className="w-4 h-4 mr-2" />
-            Cerrar Sesión
           </Button>
         </div>
       </div>

@@ -20,17 +20,10 @@ const App = () => {
         <Toaster />
         <Sonner />        <BrowserRouter>
           <Routes>
-            <Route path="/" element={<Navigate to="/dashboard" replace />} />
+            <Route path="/" element={<Dashboard />} />
             <Route path="/login" element={<Login />} />
             <Route path="/auth" element={<Auth />} />
-            <Route
-              path="/dashboard"
-              element={
-                <ProtectedRoute>
-                  <Dashboard />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/dashboard" element={<Dashboard />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
